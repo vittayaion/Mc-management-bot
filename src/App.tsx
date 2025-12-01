@@ -11,6 +11,8 @@ const PROCESS_DURATION = 10_000;
 const TICK_INTERVAL = 200;
 
 function insertOrder(queue: Order[], order: Order) {
+  if (queue.some((q) => q.id === order.id)) return queue;
+
   if (order.type === "Normal") {
     return [...queue, order];
   }
@@ -45,6 +47,7 @@ function App() {
   const [tick, setTick] = useState(() => Date.now());
   const timersRef = useRef<Map<number, number>>(new Map());
   const completedOrderIdsRef = useRef<Set<number>>(new Set());
+  const canceledOrderIdsRef = useRef<Set<number>>(new Set());
 
   const clearBotTimer = (botId: number) => {
     const timer = timersRef.current.get(botId);
@@ -55,6 +58,15 @@ function App() {
   };
 
   const completeOrder = (botId: number, orderId: number) => {
+    if (canceledOrderIdsRef.current.has(orderId)) {
+      clearBotTimer(botId);
+      canceledOrderIdsRef.current.delete(orderId);
+      setBots((prevBots) =>
+        prevBots.map((b) => (b.id === botId ? { id: b.id, status: "IDLE" } : b))
+      );
+      return;
+    }
+
     if (completedOrderIdsRef.current.has(orderId)) {
       clearBotTimer(botId);
       return;
@@ -133,6 +145,7 @@ function App() {
         startedAt,
         botId: bot.id,
       };
+      canceledOrderIdsRef.current.delete(order.id);
       const botIndex = nextBots.findIndex((b) => b.id === bot.id);
       nextBots[botIndex] = {
         id: bot.id,
@@ -200,9 +213,7 @@ function App() {
   const botsBusy = bots.filter((bot) => bot.status === "PROCESSING").length;
 
   const botLoadLabel =
-    bots.length === 0
-      ? "No bots active"
-      : `${botsBusy}/${bots.length} bots busy`;
+    bots.length === 0 ? "No bots active" : `${botsBusy}/${bots.length} bots`;
 
   return (
     <AppLayout>
@@ -224,7 +235,11 @@ function App() {
 
             <NewOrderControls createOrder={createOrder} />
 
-            <BotActivity bots={bots} tick={tick} orderProgress={orderProgress} />
+            <BotActivity
+              bots={bots}
+              tick={tick}
+              orderProgress={orderProgress}
+            />
           </section>
 
           <PendingOrders

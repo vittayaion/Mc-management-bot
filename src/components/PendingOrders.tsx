@@ -22,7 +22,7 @@ export function PendingOrders({ orders, tick, orderProgress }: Props) {
       <div className="flex flex-col gap-3">
         {orders.length === 0 && (
           <p className="rounded-lg border border-dashed border-stone-300 bg-white p-4 text-sm text-stone-500 dark:border-stone-700 dark:bg-stone-800/60 dark:text-stone-400">
-            No orders waiting. Create a Normal or VIP order to start.
+            No orders waiting.
           </p>
         )}
         {orders.map((order) => {
