@@ -1,6 +1,19 @@
 export type OrderType = "VIP" | "Normal";
-export type OrderStatus = "PENDING" | "PROCESSING" | "COMPLETE";
-export type BotStatus = "IDLE" | "PROCESSING";
+
+export const OrderStatus = {
+  Pending: "PENDING",
+  Processing: "PROCESSING",
+  Complete: "COMPLETE",
+} as const;
+
+export type OrderStatus = (typeof OrderStatus)[keyof typeof OrderStatus];
+
+export const BotStatus = {
+  Idle: "IDLE",
+  Processing: "PROCESSING",
+} as const;
+
+export type BotStatus = (typeof BotStatus)[keyof typeof BotStatus];
 
 export type Order = {
   id: number;

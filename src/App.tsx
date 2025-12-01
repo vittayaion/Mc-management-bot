@@ -1,68 +1,45 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { AppLayout } from "./components/AppLayout";
 import { BotActivity } from "./components/BotActivity";
 import { BotSummary } from "./components/BotSummary";
 import { CompletedOrders } from "./components/CompletedOrders";
 import { PendingOrders } from "./components/PendingOrders";
 import { NewOrderControls } from "./components/NewOrderControls";
-import type { Bot, Order, OrderType } from "./types";
-
-const PROCESS_DURATION = 10_000;
-const TICK_INTERVAL = 200;
-
-function insertOrder(queue: Order[], order: Order) {
-  if (queue.some((q) => q.id === order.id)) return queue;
-
-  if (order.type === "Normal") {
-    return [...queue, order];
-  }
-
-  const nextQueue = [...queue];
-  let lastVipIndex = -1;
-  for (let i = 0; i < nextQueue.length; i += 1) {
-    if (nextQueue[i].type === "VIP") {
-      lastVipIndex = i;
-    }
-  }
-  const insertAt = lastVipIndex + 1;
-  nextQueue.splice(insertAt, 0, order);
-  return nextQueue;
-}
-
-function clamp(value: number, min = 0, max = 1) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function orderProgress(order: Order, now: number) {
-  if (!order.startedAt) return 0;
-  return clamp((now - order.startedAt) / PROCESS_DURATION, 0, 1) * 100;
-}
+import { useBots } from "./hooks/useBots";
+import { useOrders } from "./hooks/useOrders";
+import { useTick } from "./hooks/useTick";
+import {
+  PROCESS_DURATION,
+  insertOrder,
+  orderProgress,
+} from "./services/orderService";
+import { clearAllBotTimers } from "./services/botService";
+import { BotStatus, OrderStatus } from "./types";
+import type { Order } from "./types";
 
 function App() {
-  const [pendingOrders, setPendingOrders] = useState<Order[]>([]);
-  const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
-  const [bots, setBots] = useState<Bot[]>([]);
-  const [nextOrderId, setNextOrderId] = useState(1);
-  const [nextBotId, setNextBotId] = useState(1);
-  const [tick, setTick] = useState(() => Date.now());
-  const timersRef = useRef<Map<number, number>>(new Map());
+  const tick = useTick();
+  const {
+    pendingOrders,
+    completedOrders,
+    createOrder,
+    markOrderComplete,
+    setPendingOrders,
+  } = useOrders();
+  const { bots, addBot, updateBots, scheduleBotTimer, clearBotTimer } =
+    useBots();
+
   const completedOrderIdsRef = useRef<Set<number>>(new Set());
   const canceledOrderIdsRef = useRef<Set<number>>(new Set());
-
-  const clearBotTimer = (botId: number) => {
-    const timer = timersRef.current.get(botId);
-    if (timer) {
-      window.clearTimeout(timer);
-      timersRef.current.delete(botId);
-    }
-  };
 
   const completeOrder = (botId: number, orderId: number) => {
     if (canceledOrderIdsRef.current.has(orderId)) {
       clearBotTimer(botId);
       canceledOrderIdsRef.current.delete(orderId);
-      setBots((prevBots) =>
-        prevBots.map((b) => (b.id === botId ? { id: b.id, status: "IDLE" } : b))
+      updateBots((prevBots) =>
+        prevBots.map((b) =>
+          b.id === botId ? { id: b.id, status: BotStatus.Idle } : b
+        )
       );
       return;
     }
@@ -78,48 +55,39 @@ function App() {
 
     const finishedOrder: Order = {
       ...current,
-      status: "COMPLETE",
+      status: OrderStatus.Complete,
       completedAt: Date.now(),
     };
 
     completedOrderIdsRef.current.add(orderId);
     clearBotTimer(botId);
 
-    setBots((prevBots) =>
-      prevBots.map((b) => (b.id === botId ? { id: b.id, status: "IDLE" } : b))
+    updateBots((prevBots) =>
+      prevBots.map((b) =>
+        b.id === botId ? { id: b.id, status: BotStatus.Idle } : b
+      )
     );
-    setPendingOrders((prev) => prev.filter((order) => order.id !== orderId));
-    setCompletedOrders((prev) =>
-      prev.some((order) => order.id === orderId)
-        ? prev
-        : [...prev, finishedOrder]
-    );
+    markOrderComplete(finishedOrder);
   };
 
-  const scheduleCompletion = (botId: number, orderId: number) => {
-    clearBotTimer(botId);
-    const timeoutId = window.setTimeout(() => {
-      completeOrder(botId, orderId);
-    }, PROCESS_DURATION);
-    timersRef.current.set(botId, timeoutId);
+  const scheduleOrderCompletion = (botId: number, orderId: number) => {
+    scheduleBotTimer(
+      botId,
+      () => completeOrder(botId, orderId),
+      PROCESS_DURATION
+    );
   };
 
   useEffect(() => {
-    const interval = window.setInterval(
-      () => setTick(Date.now()),
-      TICK_INTERVAL
-    );
     return () => {
-      window.clearInterval(interval);
-      timersRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
-      timersRef.current.clear();
+      clearAllBotTimers();
     };
   }, []);
 
   useEffect(() => {
     bots.forEach((bot) => {
       const order = bot.currentOrder;
-      if (bot.status !== "PROCESSING" || !order?.startedAt) return;
+      if (bot.status !== BotStatus.Processing || !order?.startedAt) return;
       const elapsed = tick - order.startedAt;
       if (elapsed >= PROCESS_DURATION) {
         completeOrder(bot.id, order.id);
@@ -128,80 +96,72 @@ function App() {
   }, [bots, tick]);
 
   useEffect(() => {
-    const idleBots = bots.filter((bot) => bot.status === "IDLE");
+    const idleBots = bots.filter((bot) => bot.status === BotStatus.Idle);
     if (!idleBots.length || !pendingOrders.length) return;
 
-    const queue = [...pendingOrders];
+    const pendingQueue = [...pendingOrders];
     const nextBots = bots.map((bot) => ({ ...bot }));
-    let changed = false;
+    let hasAssignedOrders = false;
 
     idleBots.forEach((bot) => {
-      if (!queue.length) return;
-      const order = queue.shift()!;
+      if (!pendingQueue.length) return;
+      const nextOrder = pendingQueue.shift()!;
       const startedAt = Date.now();
       const processingOrder: Order = {
-        ...order,
-        status: "PROCESSING",
+        ...nextOrder,
+        status: OrderStatus.Processing,
         startedAt,
         botId: bot.id,
       };
-      canceledOrderIdsRef.current.delete(order.id);
+      canceledOrderIdsRef.current.delete(nextOrder.id);
       const botIndex = nextBots.findIndex((b) => b.id === bot.id);
       nextBots[botIndex] = {
         id: bot.id,
-        status: "PROCESSING",
+        status: BotStatus.Processing,
         currentOrder: processingOrder,
       };
-      scheduleCompletion(bot.id, processingOrder.id);
-      changed = true;
+      scheduleOrderCompletion(bot.id, processingOrder.id);
+      hasAssignedOrders = true;
     });
 
-    if (changed) {
-      setBots(nextBots);
-      setPendingOrders(queue);
+    if (hasAssignedOrders) {
+      updateBots(() => nextBots);
+      setPendingOrders(pendingQueue);
     }
   }, [bots, pendingOrders]);
 
-  const handleAddBot = () => {
-    setBots((prev) => [...prev, { id: nextBotId, status: "IDLE" }]);
-    setNextBotId((id) => id + 1);
-  };
-
   const handleRemoveBot = () => {
-    setBots((prevBots) => {
+    updateBots((prevBots) => {
       if (!prevBots.length) return prevBots;
       const botToRemove = prevBots[prevBots.length - 1];
 
       clearBotTimer(botToRemove.id);
 
-      if (botToRemove.status === "PROCESSING" && botToRemove.currentOrder) {
+      if (botToRemove.status === BotStatus.Processing && botToRemove.currentOrder) {
         const resetOrder: Order = {
           ...botToRemove.currentOrder,
-          status: "PENDING",
+          status: OrderStatus.Pending,
           startedAt: undefined,
           botId: undefined,
         };
-        setPendingOrders((prev) => insertOrder(prev, resetOrder));
+        canceledOrderIdsRef.current.add(botToRemove.currentOrder.id);
+        setPendingOrders((prev) => {
+          const withoutDupes = prev.filter(
+            (order) => order.id !== resetOrder.id
+          );
+          return insertOrder(withoutDupes, resetOrder);
+        });
       }
 
       return prevBots.slice(0, -1);
     });
   };
 
-  const createOrder = (type: OrderType) => {
-    setPendingOrders((prev) =>
-      insertOrder(prev, {
-        id: nextOrderId,
-        type,
-        status: "PENDING",
-        createdAt: Date.now(),
-      })
-    );
-    setNextOrderId((id) => id + 1);
-  };
-
   const processingOrders = useMemo(
-    () => bots.flatMap((bot) => (bot.currentOrder ? [bot.currentOrder] : [])),
+    () =>
+      bots
+        .map((bot) => bot.currentOrder)
+        .filter((order): order is Order => Boolean(order)),
     [bots]
   );
 
@@ -229,7 +189,7 @@ function App() {
             <BotSummary
               bots={bots}
               botLoadLabel={botLoadLabel}
-              onAddBot={handleAddBot}
+              onAddBot={addBot}
               onRemoveBot={handleRemoveBot}
             />
 
