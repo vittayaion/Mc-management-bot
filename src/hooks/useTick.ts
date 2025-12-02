@@ -4,8 +4,8 @@ export function useTick(interval = 200) {
   const [tick, setTick] = useState(() => Date.now());
 
   useEffect(() => {
-    const id = window.setInterval(() => setTick(Date.now()), interval);
-    return () => window.clearInterval(id);
+    const id = setInterval(() => setTick(Date.now()), interval);
+    return () => clearInterval(id);
   }, [interval]);
 
   return tick;

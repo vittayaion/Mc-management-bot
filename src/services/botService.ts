@@ -8,9 +8,13 @@ export function clearBotTimer(botId: number) {
   }
 }
 
-export function scheduleBotTask(botId: number, callback: () => void, duration: number) {
+export function scheduleBotTask(
+  botId: number,
+  callback: () => void,
+  duration: number
+) {
   clearBotTimer(botId);
-  const timerId = window.setTimeout(callback, duration);
+  const timerId = setTimeout(callback, duration);
   botTimers.set(botId, timerId);
 }
 

@@ -5,16 +5,36 @@ export const PROCESS_DURATION = 10_000;
 export function insertOrder(queue: Order[], order: Order): Order[] {
   if (queue.some((q) => q.id === order.id)) return queue;
 
-  if (order.type === "Normal") return [...queue, order];
-
   const next = [...queue];
-  let lastVip = -1;
 
-  for (let i = 0; i < next.length; i++) {
-    if (next[i].type === "VIP") lastVip = i;
+  if (order.type === "VIP") {
+    const insertBeforeVip = next.findIndex(
+      (q) => q.type === "VIP" && q.createdAt > order.createdAt
+    );
+    if (insertBeforeVip !== -1) {
+      next.splice(insertBeforeVip, 0, order);
+      return next;
+    }
+
+    const firstNormal = next.findIndex((q) => q.type === "Normal");
+    next.splice(firstNormal === -1 ? next.length : firstNormal, 0, order);
+    return next;
   }
 
-  next.splice(lastVip + 1, 0, order);
+  const firstNormal = next.findIndex((q) => q.type === "Normal");
+  if (firstNormal === -1) {
+    next.push(order);
+    return next;
+  }
+
+  // Insert Normal orders by created time after VIP block
+  const laterNormalOffset = next
+    .slice(firstNormal)
+    .findIndex((q) => q.createdAt > order.createdAt);
+  const insertAt =
+    laterNormalOffset === -1 ? next.length : firstNormal + laterNormalOffset;
+
+  next.splice(insertAt, 0, order);
   return next;
 }
 
